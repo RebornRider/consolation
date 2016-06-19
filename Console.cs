@@ -1,246 +1,281 @@
-using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 
-namespace Consolation
+namespace IngameConsole
 {
-	/// <summary>
-	/// A console to display Unity's debug logs in-game.
-	/// </summary>
-	class Console : MonoBehaviour
-	{
-		struct Log
-		{
-			public string message;
-			public string stackTrace;
-			public LogType type;
-		}
+    /// <summary>
+    ///     A console to display Unity's debug logs in-game.
+    /// </summary>
+    internal class Console : MonoBehaviour
+    {
+        #region Inspector Settings
 
-		#region Inspector Settings
+        /// <summary>
+        ///     The hotkey to show and hide the console window.
+        /// </summary>
+        public KeyCode ToggleKey = KeyCode.F7;
 
-		/// <summary>
-		/// The hotkey to show and hide the console window.
-		/// </summary>
-		public KeyCode toggleKey = KeyCode.BackQuote;
+        /// <summary>
+        ///     Whether to open the window by shaking the device (mobile-only).
+        /// </summary>
+        public bool ShakeToOpen = true;
 
-		/// <summary>
-		/// Whether to open the window by shaking the device (mobile-only).
-		/// </summary>
-		public bool shakeToOpen = true;
+        /// <summary>
+        ///     The (squared) acceleration above which the window should open.
+        /// </summary>
+        public float ShakeAcceleration = 3f;
 
-		/// <summary>
-		/// The (squared) acceleration above which the window should open.
-		/// </summary>
-		public float shakeAcceleration = 3f;
+        /// <summary>
+        ///     Whether to only keep a certain number of logs.
+        ///     Setting this can be helpful if memory usage is a concern.
+        /// </summary>
+        public bool RestrictLogCount;
 
-		/// <summary>
-		/// Whether to only keep a certain number of logs.
-		///
-		/// Setting this can be helpful if memory usage is a concern.
-		/// </summary>
-		public bool restrictLogCount = false;
+        /// <summary>
+        ///     Number of logs to keep before removing old ones.
+        /// </summary>
+        public int MaxLogs = 1000;
 
-		/// <summary>
-		/// Number of logs to keep before removing old ones.
-		/// </summary>
-		public int maxLogs = 1000;
+        #endregion
 
-		#endregion
+        private struct Log
+        {
+            public string Message;
+            public string StackTrace;
+            public LogType Type;
+        }
 
-		readonly List<Log> logs = new List<Log>();
-		Vector2 scrollPosition;
-		bool visible;
-		bool collapse;
 
-		// Visual elements:
+        private const string WindowTitle = "Console";
+        private const int Margin = 20;
+        private const Colors StackTraceColor = Colors.grey;
 
-		static readonly Dictionary<LogType, Color> logTypeColors = new Dictionary<LogType, Color>
-		{
-			{ LogType.Assert, Color.white },
-			{ LogType.Error, Color.red },
-			{ LogType.Exception, Color.red },
-			{ LogType.Log, Color.white },
-			{ LogType.Warning, Color.yellow },
-		};
+        // Visual elements:
 
-		const string windowTitle = "Console";
-		const int margin = 20;
-		static readonly GUIContent clearLabel = new GUIContent("Clear", "Clear the contents of the console.");
-		static readonly GUIContent collapseLabel = new GUIContent("Collapse", "Hide repeated messages.");
+        private static readonly Dictionary<LogType, Color> LogTypeColors = new Dictionary<LogType, Color>
+        {
+            {LogType.Assert, Color.white},
+            {LogType.Error, Color.red},
+            {LogType.Exception, Color.red},
+            {LogType.Log, Color.white},
+            {LogType.Warning, Color.yellow}
+        };
 
-		readonly Rect titleBarRect = new Rect(0, 0, 10000, 20);
-		Rect windowRect = new Rect(margin, margin, Screen.width - (margin * 2), Screen.height - (margin * 2));
+        private static readonly GUIContent ClearLabel = new GUIContent("Clear", "Clear the contents of the console.");
+        private static readonly GUIContent CollapseLabel = new GUIContent("Collapse", "Hide repeated messages.");
+        private static readonly GUIContent StackTraceLabel = new GUIContent("Show Stack Trace", "Show log origin.");
 
-		void OnEnable ()
-		{
+        private readonly List<Log> _logs = new List<Log>();
+
+        private readonly Rect _titleBarRect = new Rect(0, 0, 10000, 20);
+        private bool _collapse;
+        private bool _showStackTrace;
+        private Vector2 _scrollPosition;
+        private bool _visible;
+        private Rect _windowRect = new Rect(Margin, Margin, Screen.width - Margin * 2, Screen.height - Margin * 2);
+
+        private void OnEnable()
+        {
 #if UNITY_5
-			Application.logMessageReceived += HandleLog;
+            Application.logMessageReceived += HandleLog;
 #else
-			Application.RegisterLogCallback(HandleLog);
+            Application.RegisterLogCallback(HandleLog);
 #endif
-		}
+        }
 
-		void OnDisable ()
-		{
+        private void OnDisable()
+        {
 #if UNITY_5
-			Application.logMessageReceived -= HandleLog;
+            Application.logMessageReceived -= HandleLog;
 #else
-			Application.RegisterLogCallback(null);
+            Application.RegisterLogCallback(null);
 #endif
-		}
+        }
 
-		void Update ()
-		{
-			if (Input.GetKeyDown(toggleKey)) {
-				visible = !visible;
-			}
+        private void Update()
+        {
+            if (Input.GetKeyDown(ToggleKey))
+            {
+                _visible = !_visible;
+            }
 
-			if (shakeToOpen && Input.acceleration.sqrMagnitude > shakeAcceleration) {
-				visible = true;
-			}
-		}
+            if (ShakeToOpen && Input.acceleration.sqrMagnitude > ShakeAcceleration)
+            {
+                _visible = true;
+            }
+        }
 
-		void OnGUI ()
-		{
-			if (!visible) {
-				return;
-			}
+        private void OnGUI()
+        {
+            if (!_visible)
+            {
+                return;
+            }
 
-			windowRect = GUILayout.Window(123456, windowRect, DrawConsoleWindow, windowTitle);
-		}
+            _windowRect = GUILayout.Window(123456, _windowRect, DrawConsoleWindow, WindowTitle);
+        }
 
-		/// <summary>
-		/// Displays a window that lists the recorded logs.
-		/// </summary>
-		/// <param name="windowID">Window ID.</param>
-		void DrawConsoleWindow (int windowID)
-		{
-			DrawLogsList();
-			DrawToolbar();
+        /// <summary>
+        ///     Displays a window that lists the recorded logs.
+        /// </summary>
+        /// <param name="windowId">Window ID.</param>
+        private void DrawConsoleWindow(int windowId)
+        {
+            DrawLogsList();
+            DrawToolbar();
 
-			// Allow the window to be dragged by its title bar.
-			GUI.DragWindow(titleBarRect);
-		}
+            // Allow the window to be dragged by its title bar.
+            GUI.DragWindow(_titleBarRect);
+        }
 
-		/// <summary>
-		/// Displays a scrollable list of logs.
-		/// </summary>
-		void DrawLogsList ()
-		{
-			scrollPosition = GUILayout.BeginScrollView(scrollPosition);
+        /// <summary>
+        ///     Displays a scrollable list of logs.
+        /// </summary>
+        private void DrawLogsList()
+        {
+            _scrollPosition = GUILayout.BeginScrollView(_scrollPosition);
 
-			// Used to determine height of accumulated log labels.
-			GUILayout.BeginVertical();
+            // Used to determine height of accumulated log labels.
+            GUILayout.BeginVertical();
 
-				// Iterate through the recorded logs.
-				for (var i = 0; i < logs.Count; i++) {
-					var log = logs[i];
+            // Iterate through the recorded logs.
+            for (var i = 0; i < _logs.Count; i++)
+            {
+                Log log = _logs[i];
 
-					// Combine identical messages if collapse option is chosen.
-					if (collapse && i > 0) {
-						var previousMessage = logs[i - 1].message;
+                // Combine identical messages if collapse option is chosen.
+                if (_collapse && i > 0)
+                {
+                    string previousMessage = _logs[i - 1].Message;
 
-						if (log.message == previousMessage) {
-							continue;
-						}
-					}
+                    if (log.Message == previousMessage)
+                    {
+                        continue;
+                    }
+                }
 
-					GUI.contentColor = logTypeColors[log.type];
-					GUILayout.Label(log.message);
-				}
+                GUI.contentColor = LogTypeColors[log.Type];
+                if (_showStackTrace)
+                {
+                    GUILayout.Label(log.Message + FormatStackTrace(log.StackTrace));
+                }
+                else
+                {
+                    GUILayout.Label(log.Message);
+                }
+            }
 
-			GUILayout.EndVertical();
-			var innerScrollRect = GUILayoutUtility.GetLastRect();
-			GUILayout.EndScrollView();
-			var outerScrollRect = GUILayoutUtility.GetLastRect();
+            GUILayout.EndVertical();
+            Rect innerScrollRect = GUILayoutUtility.GetLastRect();
+            GUILayout.EndScrollView();
+            Rect outerScrollRect = GUILayoutUtility.GetLastRect();
 
-			// If we're scrolled to bottom now, guarantee that it continues to be in next cycle.
-			if (Event.current.type == EventType.Repaint && IsScrolledToBottom(innerScrollRect, outerScrollRect)) {
-				ScrollToBottom();
-			}
+            // If we're scrolled to bottom now, guarantee that it continues to be in next cycle.
+            if (Event.current.type == EventType.Repaint && IsScrolledToBottom(innerScrollRect, outerScrollRect))
+            {
+                ScrollToBottom();
+            }
 
-			// Ensure GUI colour is reset before drawing other components.
-			GUI.contentColor = Color.white;
-		}
+            // Ensure GUI colour is reset before drawing other components.
+            GUI.contentColor = Color.white;
+        }
 
-		/// <summary>
-		/// Displays options for filtering and changing the logs list.
-		/// </summary>
-		void DrawToolbar ()
-		{
-			GUILayout.BeginHorizontal();
+        private static string FormatStackTrace(string stackTrace)
+        {
+            return stackTrace.Trim()
+                .Split('\n')
+                .Last()
+                .Insert(0, "\n --> ")
+                .Italics()
+                .Colored(StackTraceColor);
+        }
 
-				if (GUILayout.Button(clearLabel)) {
-					logs.Clear();
-				}
+        /// <summary>
+        ///     Displays options for filtering and changing the logs list.
+        /// </summary>
+        private void DrawToolbar()
+        {
+            GUILayout.BeginHorizontal();
 
-				collapse = GUILayout.Toggle(collapse, collapseLabel, GUILayout.ExpandWidth(false));
+            if (GUILayout.Button(ClearLabel))
+            {
+                _logs.Clear();
+            }
 
-			GUILayout.EndHorizontal();
-		}
+            _collapse = GUILayout.Toggle(_collapse, CollapseLabel, GUILayout.ExpandWidth(false));
+            _showStackTrace = GUILayout.Toggle(_showStackTrace, StackTraceLabel, GUILayout.ExpandWidth(false));
 
-		/// <summary>
-		/// Records a log from the log callback.
-		/// </summary>
-		/// <param name="message">Message.</param>
-		/// <param name="stackTrace">Trace of where the message came from.</param>
-		/// <param name="type">Type of message (error, exception, warning, assert).</param>
-		void HandleLog (string message, string stackTrace, LogType type)
-		{
-			logs.Add(new Log {
-				message = message,
-				stackTrace = stackTrace,
-				type = type,
-			});
+            GUILayout.EndHorizontal();
+        }
 
-			TrimExcessLogs();
-		}
+        /// <summary>
+        ///     Records a log from the stackTrace callback.
+        /// </summary>
+        /// <param name="message">Message.</param>
+        /// <param name="stackTrace">Trace of where the message came from.</param>
+        /// <param name="type">Type of message (error, exception, warning, assert).</param>
+        private void HandleLog(string message, string stackTrace, LogType type)
+        {
+            _logs.Add(new Log
+            {
+                Message = message,
+                StackTrace = stackTrace,
+                Type = type
+            });
 
-		/// <summary>
-		/// Determines whether the scroll view is scrolled to the bottom.
-		/// </summary>
-		/// <param name="innerScrollRect">Rect surrounding scroll view content.</param>
-		/// <param name="outerScrollRect">Scroll view container.</param>
-		/// <returns>Whether scroll view is scrolled to bottom.</returns>
-		bool IsScrolledToBottom (Rect innerScrollRect, Rect outerScrollRect) {
-			var innerScrollHeight = innerScrollRect.height;
+            TrimExcessLogs();
+        }
 
-			// Take into account extra padding added to the scroll container.
-			var outerScrollHeight = outerScrollRect.height - GUI.skin.box.padding.vertical;
+        /// <summary>
+        ///     Determines whether the scroll view is scrolled to the bottom.
+        /// </summary>
+        /// <param name="innerScrollRect">Rect surrounding scroll view content.</param>
+        /// <param name="outerScrollRect">Scroll view container.</param>
+        /// <returns>Whether scroll view is scrolled to bottom.</returns>
+        private bool IsScrolledToBottom(Rect innerScrollRect, Rect outerScrollRect)
+        {
+            float innerScrollHeight = innerScrollRect.height;
 
-			// If contents of scroll view haven't exceeded outer container, treat it as scrolled to bottom.
-			if (outerScrollHeight > innerScrollHeight) {
-				return true;
-			}
+            // Take into account extra padding added to the scroll container.
+            float outerScrollHeight = outerScrollRect.height - GUI.skin.box.padding.vertical;
 
-			var scrolledToBottom = Mathf.Approximately(innerScrollHeight, scrollPosition.y + outerScrollHeight);
-			return scrolledToBottom;
-		}
+            // If contents of scroll view haven't exceeded outer container, treat it as scrolled to bottom.
+            if (outerScrollHeight > innerScrollHeight)
+            {
+                return true;
+            }
 
-		/// <summary>
-		/// Moves the scroll view down so that the last log is visible.
-		/// </summary>
-		void ScrollToBottom ()
-		{
-			scrollPosition = new Vector2(0, Int32.MaxValue);
-		}
+            bool scrolledToBottom = Mathf.Approximately(innerScrollHeight, _scrollPosition.y + outerScrollHeight);
+            return scrolledToBottom;
+        }
 
-		/// <summary>
-		/// Removes old logs that exceed the maximum number allowed.
-		/// </summary>
-		void TrimExcessLogs ()
-		{
-			if (!restrictLogCount) {
-				return;
-			}
+        /// <summary>
+        ///     Moves the scroll view down so that the last log is visible.
+        /// </summary>
+        private void ScrollToBottom()
+        {
+            _scrollPosition = new Vector2(0, int.MaxValue);
+        }
 
-			var amountToRemove = Mathf.Max(logs.Count - maxLogs, 0);
+        /// <summary>
+        ///     Removes old logs that exceed the maximum number allowed.
+        /// </summary>
+        private void TrimExcessLogs()
+        {
+            if (!RestrictLogCount)
+            {
+                return;
+            }
 
-			if (amountToRemove == 0) {
-				return;
-			}
+            int amountToRemove = Mathf.Max(_logs.Count - MaxLogs, 0);
 
-			logs.RemoveRange(0, amountToRemove);
-		}
-	}
+            if (amountToRemove == 0)
+            {
+                return;
+            }
+
+            _logs.RemoveRange(0, amountToRemove);
+        }
+    }
 }
