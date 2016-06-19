@@ -7,7 +7,7 @@ the game itself. This is especially useful on mobile devices.
 ## Using
 
 Attach this script to a game object. The window can be opened with a
-configurable hotkey (defaults to backtick). Alternatively, enable shake-to-open
+configurable hotkey (defaults to F7). Alternatively, enable shake-to-open
 in the Inspector to open the console on mobile devices.
 
 
